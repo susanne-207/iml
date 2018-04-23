@@ -193,13 +193,15 @@ Partial = R6::R6Class("Partial",
         results.ice = melt(results.ice, variable.name = "..class.name", 
           value.name = "..y.hat", measure.vars = y.hat.names)
       } else {
-        results.ice[, "..y.hat" := private$qResults]
+        y.hat = "..y.hat"
+        results.ice[, ..y.hat := private$qResults]
         results.ice$..class.name = 1
       }
       
       if (!is.null(private$anchor.value)) {
         anchor.index = which(results.ice[,self$feature.name, with=FALSE] == private$anchor.value)
-        X.aggregated.anchor = results.ice[anchor.index, c("..y.hat", "..id", "..class.name"), with = FALSE]
+        cols = c("..y.hat", "..id", "..class.name")
+        X.aggregated.anchor = results.ice[anchor.index, ..cols]
         names(X.aggregated.anchor) = c("anchor.yhat", "..id", "..class.name")
         # In case that the anchor value was also part of grid
         X.aggregated.anchor = unique(X.aggregated.anchor)
@@ -210,6 +212,8 @@ Partial = R6::R6Class("Partial",
       
       results = data.table()
       if (self$aggregation == "pdp") {
+        # For data.table package
+        y.hat = "y.hat"
         if (private$multiClass) {
           results.aggregated = results.ice[, list(..y.hat = mean(..y.hat)), 
             by = c(self$feature.name, "..class.name")]
