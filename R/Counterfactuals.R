@@ -459,16 +459,23 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       # Define operators based on parameterset private$param.set
       # Messages can be ignored
       sdev.l = sdev_to_list(private$sdev, private$param.set)
-      mutator = suppressMessages(mosmafs::combine.operators(private$param.set,
-        numeric = ecr::setup(mosmafs::mutGaussScaled, p = self$p.mut.gen, sdev = sdev.l$numeric),
-        integer = ecr::setup(mosmafs::mutGaussIntScaled, p = self$p.mut.gen, sdev = sdev.l$integer),
-        #numeric = ecr::setup(custom.mutGauss, p = self$p.mut.gen, sdev = sdev.l$numeric),
-        #integer = ecr::setup(custom.mutGaussInt, p = self$p.mut.gen, sdev = sdev.l$integer),
-        #race = ecr::setup(mosmafs::mutBitflip, p = self$p.mut.gen),
-        discrete = ecr::setup(mosmafs::mutRandomChoice, p = self$p.mut.gen),
-        logical = ecr::setup(ecr::mutBitflip, p = self$p.mut.gen),
-        use.orig = ecr::setup(mosmafs::mutBitflipCHW, p = self$p.mut.use.orig),
-        .binary.discrete.as.logical = TRUE))
+      if (is.logical(self$predictor$conditional)) {
+        single.mutator = mosmafs::combine.operators(private$param.set,
+           numeric = ecr::setup(mosmafs::mutGaussScaled, p = self$p.mut.gen, sdev = sdev.l$numeric),
+           integer = ecr::setup(mosmafs::mutGaussIntScaled, p = self$p.mut.gen, sdev = sdev.l$integer),
+           discrete = ecr::setup(mosmafs::mutRandomChoice, p = self$p.mut.gen),
+           logical = ecr::setup(ecr::mutBitflip, p = self$p.mut.gen),
+           use.orig = ecr::setup(mosmafs::mutBitflipCHW, p = self$p.mut.use.orig),
+           .binary.discrete.as.logical = TRUE)
+        mutator = ecr::makeMutator(function(ind) {
+          transform_to_orig(single.mutator(ind), x.interest, delete.use.orig = FALSE,
+          fixed.features = self$fixed.features, max.changed = self$max.changed)
+        }, supported = "custom")
+      } else {
+        mutator = ecr::setup(mutConDens, p.gen = self$p.mut.gen, p.use.orig = self$p.mut.use.orig, 
+            pred = self$predictor, x.interest = self$x.interest, fixed.features = self$fixed.features, 
+            max.changed = self$max.changed, param.set = private$param.set)
+      }
       
       recombinator = suppressMessages(mosmafs::combine.operators(private$param.set,
         numeric = ecr::setup(ecr::recSBX, p = self$p.rec.gen),
@@ -477,11 +484,6 @@ Counterfactuals = R6::R6Class("Counterfactuals",
         logical = ecr::setup(mosmafs::recPCrossover, p = self$p.rec.gen),
         use.orig = ecr::setup(mosmafs::recPCrossover, p = self$p.rec.use.orig),
         .binary.discrete.as.logical = TRUE))
-      
-      overall.mutator = ecr::makeMutator(function(ind) {
-        transform_to_orig(mutator(ind), x.interest, delete.use.orig = FALSE, 
-          fixed.features = self$fixed.features, max.changed = self$max.changed)
-      }, supported = "custom")
       
       overall.recombinator <- ecr::makeRecombinator(function(inds, ...) {
         inds <- recombinator(inds)
@@ -513,13 +515,11 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       log.stats$fitness = c(log.stats$fitness,
         list(domHV = function(x) ecr::computeHV(x,
           ref.point = private$ref.point)/max.hv
-          #delta = function(x) ecr:::emoaIndDelta(x[c(1,2),]), 
-          #spacing = function(x) spacing(t(x), "manhattan")
         ))
       
       # Compute counterfactuals
       ecrresults = mosmafs::slickEcr(fn, lambda = self$mu, population = initial.pop,
-        mutator = overall.mutator,
+        mutator = mutator, 
         recombinator = overall.recombinator, generations = self$generations,
         parent.selector = parent.selector,
         survival.strategy = select_diverse,

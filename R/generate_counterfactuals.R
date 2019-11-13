@@ -312,3 +312,44 @@ computeCrowdingDistanceR_ver2 = function(fitness, candidates) {
   cds = jitter(cds, factor = 1)
   return(cds)
 }
+
+#' Mutator that samples from conditional probability
+#' #' 
+#' mutConDens = ecr::makeMutator(function(ind, p, pred, ...) {
+#'   affect = runif(length(ind)) < p
+#'   affected.cols = names(ind)[affect]
+#'   affected.cols = sample(affected.cols)
+#'   for (a in affected.cols){
+#'     ind[a] = pred$conditional$csample(X = data.table(t(ind)), feature = a, size = 1)[[1]]
+#'   }
+#'   return(ind)
+#' }, supported = "custom")
+mutConDens = ecr::makeMutator(function(ind, p.gen, p.use.orig, pred, x.interest, fixed.features, max.changed,
+                                       param.set) {
+  
+  # Mutate use.original vector: 
+  ind$use.orig = as.logical(mosmafs::mutBitflipCHW(as.integer(ind$use.orig), p = p.use.orig))
+  ind = transform_to_orig(ind, x.interest, delete.use.orig = FALSE, 
+      fixed.features = fixed.features, max.changed = max.changed)
+  use.orig = ind$use.orig
+  ind$use.orig = NULL
+  
+  # Mutate others
+  affect = NA
+  affect = runif(length(ind)) < p.gen
+  affected.cols = names(ind)[affect & !use.orig]
+  affected.cols = sample(affected.cols)
+  X = data.table::as.data.table(data.frame(lapply(ind, type.convert), stringsAsFactors=FALSE))
+  for (a in affected.cols){
+    val = pred$conditional$csample(X = X, feature = a, size = 1)[[1]]
+    if (param.set$pars[[a]]$type == "numeric") {
+      lower = param.set$pars[[a]]$lower
+      upper = param.set$pars[[a]]$upper
+      val = pmin(pmax(lower, val), upper)
+    }
+    ind[a] = val
+  }
+  ind$use.orig = use.orig
+  assert_list(ind)
+  return(ind)  
+}, supported = "custom")

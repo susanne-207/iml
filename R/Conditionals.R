@@ -18,6 +18,7 @@ Conditionals = R6Class(
       assert_number(size, lower = 1)
       assert_character(feature)
       assert_data_table(X)
+      X = as.data.frame(X)
       cmodel = self$models[[feature]]
       if (inherits(cmodel, "trafotree")) {
         probs = seq(from = 0, to = 1, length.out = 50)
