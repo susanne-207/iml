@@ -19,7 +19,7 @@
 #' Must have same ordering as columns in x and x.interest.}
 #' }
 #' @return (matrix)
-fitness_fun = function(x, x.interest, target, predictor, range = NULL) {
+fitness_fun = function(x, x.interest, target, predictor, train.data, range = NULL) {
   assertDataFrame(x)
   assertDataFrame(x.interest, nrows = 1, any.missing = FALSE)
   assertNumeric(target, min.len = 1, max.len = 2)
@@ -52,10 +52,11 @@ fitness_fun = function(x, x.interest, target, predictor, range = NULL) {
   q2 = StatMatch::gower.dist(data.x = x.interest, data.y = x, rngs = range, 
     KR.corr = FALSE)[1,]
   q3 = rowSums(x != x.interest[rep(row.names(x.interest), nrow(x)),])
-  
-  fitness = mapply(function(a,b,c) {
-    c(a,b,c)
-  }, q1, q2, q3)
+  q4 = apply(StatMatch::gower.dist(data.x = train.data, data.y = x, rngs = range, 
+    KR.corr = FALSE), MARGIN = 2, FUN = min)
+  fitness = mapply(function(a, b, c, d) {
+    c(a, b, c, d)
+  }, q1, q2, q3, q4)
   return(fitness)
 }
 
@@ -118,7 +119,7 @@ select_diverse = function (control, population, offspring, fitness,
 select_nondom = ecr::makeSelector(
   selector = function(fitness, n.select, candidates, 
     epsilon = .Machine$double.xmax, 
-    extract.duplicates = TRUE, vers = 1) {
+    extract.duplicates = TRUE, vers = 1, penalize.infeasible = TRUE) {
     
     assert_number(n.select)
     if (n.select > ncol(fitness)-1) {
@@ -131,8 +132,16 @@ select_nondom = ecr::makeSelector(
     
     # get indices of infeasible solutions with distance to target 
     # bigger epsilon
-    infeasible.idx = which(fitness[1,] > epsilon)
-    order.infeasible = order(fitness[1, infeasible.idx])
+    if (penalize.infeasible) {
+    infeasible.idx = which(fitness[4,] > epsilon)
+    order.infeasible = order(fitness[4, infeasible.idx])
+    fitness = fitness[1:3, ]
+    } else {
+      infeasible.idx = NULL
+    }
+      # infeasible.idx = which(fitness[1,] > epsilon)
+      # order.infeasible = order(fitness[1, infeasible.idx])
+  
     
     # if duplicates should be substracted, get indices of unique elements
     if (extract.duplicates) {
@@ -160,9 +169,11 @@ select_nondom = ecr::makeSelector(
     
     # change domination layer of infeasible solutions
     i = 0
-    for (inf.id in infeasible.idx[order.infeasible]) {
-      ranks[inf.id] = max.rank + i
-      i = i + 1
+    if (!is.null(infeasible.idx)) {
+      for (inf.id in infeasible.idx[order.infeasible]) {
+        ranks[inf.id] = max.rank + i
+        i = i + 1
+      }
     }
     max.rank = max(ranks)
     
