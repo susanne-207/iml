@@ -460,13 +460,13 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       # Messages can be ignored
       sdev.l = sdev_to_list(private$sdev, private$param.set)
       if (is.logical(self$predictor$conditional)) {
-        single.mutator = mosmafs::combine.operators(private$param.set,
+        single.mutator = suppressWarnings(mosmafs::combine.operators(private$param.set,
            numeric = ecr::setup(mosmafs::mutGaussScaled, p = self$p.mut.gen, sdev = sdev.l$numeric),
            integer = ecr::setup(mosmafs::mutGaussIntScaled, p = self$p.mut.gen, sdev = sdev.l$integer),
            discrete = ecr::setup(mosmafs::mutRandomChoice, p = self$p.mut.gen),
            logical = ecr::setup(ecr::mutBitflip, p = self$p.mut.gen),
            use.orig = ecr::setup(mosmafs::mutBitflipCHW, p = self$p.mut.use.orig),
-           .binary.discrete.as.logical = TRUE)
+           .binary.discrete.as.logical = TRUE))
         mutator = ecr::makeMutator(function(ind) {
           transform_to_orig(single.mutator(ind), x.interest, delete.use.orig = FALSE,
           fixed.features = self$fixed.features, max.changed = self$max.changed)
