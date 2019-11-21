@@ -180,7 +180,8 @@ Counterfactuals = R6::R6Class("Counterfactuals",
     seltournament = NULL, 
     crow.dist.version = NULL, 
     sd.for.init = NULL,
-    penalize.infeasible = NULL,
+    penalize.infeas = NULL,
+    track.infeas = NULL,
     lower = NULL,
     upper = NULL,
     log = NULL,
@@ -189,7 +190,8 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       mu = 50, generations = 50, p.rec = 0.9, p.rec.gen = 0.7, p.rec.use.orig = 0.7,
       p.mut = 0.2, p.mut.gen = 0.5, p.mut.use.orig = 0.2, 
       use.ice.curve.var = FALSE, seltournament = TRUE,  
-      lower = NULL, upper = NULL, crow.dist.version = 1, sd.for.init = FALSE, penalize.infeasible = TRUE) {
+      lower = NULL, upper = NULL, crow.dist.version = 1, sd.for.init = FALSE, 
+      track.infeas = TRUE, penalize.infeas = FALSE) {
       
       super$initialize(predictor = predictor)
       fixed.features = private$sanitize_feature(fixed.features, predictor$data$feature.names)
@@ -222,7 +224,8 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       checkmate::assert_logical(use.ice.curve.var)
       checkmate::assert_logical(seltournament)
       checkmate::assert_logical(sd.for.init)
-      checkmate::assert_logical(penalize.infeasible)
+      checkmate::assert_logical(penalize.infeas)
+      checkmate::assert_logical(track.infeas)
       
       # assign
       self$target = target
@@ -248,7 +251,8 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       self$lower = lower
       self$upper = upper
       self$sd.for.init = sd.for.init
-      self$penalize.infeasible = penalize.infeasible
+      self$penalize.infeas = penalize.infeas
+      self$track.infeas = track.infeas
       
       # Define parameterset
       private$param.set= ParamHelpers::makeParamSet(
@@ -376,7 +380,7 @@ Counterfactuals = R6::R6Class("Counterfactuals",
     param.set= NULL,
     param.set.init = NULL,
     ecrresults = NULL,
-    obj.names = c("dist.target", "dist.x.interest", "nr.changed", "dist.train"),
+    obj.names = NULL, 
     set_x_interest = function(x.interest) {
       assert_data_frame(x.interest, any.missing = FALSE, all.missing = FALSE, 
         nrows = 1, null.ok = FALSE)
@@ -407,7 +411,10 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       
       # Define reference point for hypervolumn computation
       private$ref.point = c(min(abs(self$y.hat.interest - self$target)), 
-        1, ncol(self$x.interest), 1)
+        1, ncol(self$x.interest))
+      if (self$track.infeas) {
+        private$ref.point = c(private$ref.point, 1)
+      }
       if (is.infinite(private$ref.point[1])) {
         pred = self$predictor$predict(self$predictor$data$get.x())
         private$ref.point[1] = diff(c(min(pred), max(pred)))
@@ -451,12 +458,18 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       })
       
       # Create fitness function with package smoof
+      
+      
+      n.obj = ifelse(self$track.infeas, 4, 3)
+      
       fn = smoof::makeMultiObjectiveFunction(
-        has.simple.signature = FALSE, par.set = private$param.set, n.objectives = 4, 
+        has.simple.signature = FALSE, par.set = private$param.set, 
+        n.objectives = n.obj, 
         noisy = TRUE, ref.point = private$ref.point,
         fn = function(x, fidelity = NULL) {
           fitness_fun(x, x.interest = self$x.interest, target = self$target, 
-            predictor = self$predictor, train.data = self$predictor$data$get.x(), range = private$range)
+            predictor = self$predictor, train.data = self$predictor$data$get.x(), 
+            range = private$range, track.infeas = self$track.infeas)
         })
       
       fn = mosmafs::setMosmafsVectorized(fn)
@@ -466,21 +479,21 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       # Messages can be ignored
       sdev.l = sdev_to_list(private$sdev, private$param.set)
       if (is.logical(self$predictor$conditional)) {
-        single.mutator = suppressWarnings(mosmafs::combine.operators(private$param.set,
-           numeric = ecr::setup(mosmafs::mutGaussScaled, p = self$p.mut.gen, sdev = sdev.l$numeric),
-           integer = ecr::setup(mosmafs::mutGaussIntScaled, p = self$p.mut.gen, sdev = sdev.l$integer),
-           discrete = ecr::setup(mosmafs::mutRandomChoice, p = self$p.mut.gen),
-           logical = ecr::setup(ecr::mutBitflip, p = self$p.mut.gen),
-           use.orig = ecr::setup(mosmafs::mutBitflipCHW, p = self$p.mut.use.orig),
-           .binary.discrete.as.logical = TRUE))
+        single.mutator = suppressMessages(mosmafs::combine.operators(private$param.set,
+          numeric = ecr::setup(mosmafs::mutGaussScaled, p = self$p.mut.gen, sdev = sdev.l$numeric),
+          integer = ecr::setup(mosmafs::mutGaussIntScaled, p = self$p.mut.gen, sdev = sdev.l$integer),
+          discrete = ecr::setup(mosmafs::mutRandomChoice, p = self$p.mut.gen),
+          logical = ecr::setup(ecr::mutBitflip, p = self$p.mut.gen),
+          use.orig = ecr::setup(mosmafs::mutBitflipCHW, p = self$p.mut.use.orig),
+          .binary.discrete.as.logical = TRUE))
         mutator = ecr::makeMutator(function(ind) {
           transform_to_orig(single.mutator(ind), x.interest, delete.use.orig = FALSE,
-          fixed.features = self$fixed.features, max.changed = self$max.changed)
+            fixed.features = self$fixed.features, max.changed = self$max.changed)
         }, supported = "custom")
       } else {
         mutator = ecr::setup(mutConDens, p.gen = self$p.mut.gen, p.use.orig = self$p.mut.use.orig, 
-            pred = self$predictor, x.interest = self$x.interest, fixed.features = self$fixed.features, 
-            max.changed = self$max.changed, param.set = private$param.set)
+          pred = self$predictor, x.interest = self$x.interest, fixed.features = self$fixed.features, 
+          max.changed = self$max.changed, param.set = private$param.set)
       }
       
       recombinator = suppressMessages(mosmafs::combine.operators(private$param.set,
@@ -508,7 +521,7 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       survival.selector = ecr::setup(select_nondom, 
         epsilon = self$epsilon,  
         extract.duplicates = TRUE, vers = self$crow.dist.version, 
-        penalize.infeasible = self$penalize.infeasible)
+        penalize.infeas = self$penalize.infeas)
       
       # Extract algorithm information with a log object
       log.stats = list(fitness = lapply(
@@ -518,7 +531,7 @@ Counterfactuals = R6::R6Class("Counterfactuals",
         }))
       names(log.stats$fitness) = sprintf("obj.%s", seq_len(n.objectives))
       log.stats$fitness = unlist(log.stats$fitness, recursive = FALSE)
-      max.hv = ecr::computeHV(matrix(c(0, 0, 0, 0)), private$ref.point)
+      max.hv = ecr::computeHV(matrix(rep(0, length(private$ref.point))), private$ref.point)
       log.stats$fitness = c(log.stats$fitness,
         list(domHV = function(x) ecr::computeHV(x,
           ref.point = private$ref.point)/max.hv
@@ -539,12 +552,18 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       #   mosmafs::valuesFromNames(private$param.set, x))
       results = mosmafs::listToDf(ecrresults$pareto.set, private$param.set)
       results[, grepl("use.orig", names(results))] = NULL
-      #cat("run finished\n")
       return(results)
     },
     aggregate = function() {
       
       pareto.front = private$ecrresults$pareto.front
+      if (self$track.infeas) {
+        private$obj.names = c("dist.target", "dist.x.interest", "nr.changed", "dist.train")
+        id.cols = 9
+      } else {
+        private$obj.names = c("dist.target", "dist.x.interest", "nr.changed")
+        id.cols = 7
+      }
       names(pareto.front) = private$obj.names
       
       pareto.set = private$dataDesign
@@ -576,11 +595,11 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       log$population.div = div
       nam = c("generation", paste(private$obj.names, "min", sep = "."), 
         paste(private$obj.names, "mean", sep = "."))
-      names(log)[1:9] = nam
+      names(log)[1:id.cols] = nam
       evals = mosmafs::collectResult(private$ecrresults)$evals
       log$evals = evals
       
-      log = log[c("generation", "state", "evals", nam[2:9], "fitness.domHV", 
+      log = log[c("generation", "state", "evals", nam[2:id.cols], "fitness.domHV", 
         #"fitness.delta", 
         #"fitness.spacing", 
         "population.div")]

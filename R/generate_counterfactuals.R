@@ -19,7 +19,8 @@
 #' Must have same ordering as columns in x and x.interest.}
 #' }
 #' @return (matrix)
-fitness_fun = function(x, x.interest, target, predictor, train.data, range = NULL) {
+fitness_fun = function(x, x.interest, target, predictor, train.data, range = NULL, 
+  track.infeas = TRUE) {
   assertDataFrame(x)
   assertDataFrame(x.interest, nrows = 1, any.missing = FALSE)
   assertNumeric(target, min.len = 1, max.len = 2)
@@ -52,11 +53,17 @@ fitness_fun = function(x, x.interest, target, predictor, train.data, range = NUL
   q2 = StatMatch::gower.dist(data.x = x.interest, data.y = x, rngs = range, 
     KR.corr = FALSE)[1,]
   q3 = rowSums(x != x.interest[rep(row.names(x.interest), nrow(x)),])
-  q4 = apply(StatMatch::gower.dist(data.x = train.data, data.y = x, rngs = range, 
-    KR.corr = FALSE), MARGIN = 2, FUN = min)
-  fitness = mapply(function(a, b, c, d) {
-    c(a, b, c, d)
-  }, q1, q2, q3, q4)
+  if (track.infeas) {
+    q4 = apply(StatMatch::gower.dist(data.x = train.data, data.y = x, rngs = range, 
+      KR.corr = FALSE), MARGIN = 2, FUN = min)
+    fitness = mapply(function(a, b, c, d) {
+      c(a, b, c, d)
+    }, q1, q2, q3, q4)
+  } else {
+    fitness = mapply(function(a, b, c) {
+      c(a, b, c)
+    }, q1, q2, q3)
+  }
   return(fitness)
 }
 
@@ -119,7 +126,7 @@ select_diverse = function (control, population, offspring, fitness,
 select_nondom = ecr::makeSelector(
   selector = function(fitness, n.select, candidates, 
     epsilon = .Machine$double.xmax, 
-    extract.duplicates = TRUE, vers = 1, penalize.infeasible = TRUE) {
+    extract.duplicates = TRUE, vers = 1, penalize.infeas = TRUE) {
     
     assert_number(n.select)
     if (n.select > ncol(fitness)-1) {
@@ -132,7 +139,7 @@ select_nondom = ecr::makeSelector(
     
     # get indices of infeasible solutions with distance to target 
     # bigger epsilon
-    if (penalize.infeasible) {
+    if (penalize.infeas) {
     infeasible.idx = which(fitness[4,] > epsilon)
     order.infeasible = order(fitness[4, infeasible.idx])
     fitness = fitness[1:3, ]
