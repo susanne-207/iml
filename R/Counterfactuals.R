@@ -69,8 +69,6 @@
 #' 'predictor'.}
 #' \item{use.ice.curve.var:}{logical(1)\cr Whether ICE curve variance should be used to 
 #' initialize population. Default is FALSE.}
-#' \item{seltournament:}{logical(1)\cr Whether to use the binary tournament selector
-#' to select parents. Default TRUE.}
 #' \item{crow.dist.version: }{integer(1)\cr Which crowding distance version should be
 #'  used. The default 1 corresponds to the version of Avila et. al., 2 corresponds 
 #' to a modified version of Avila et. al. originally used for reducing the number
@@ -177,7 +175,6 @@ Counterfactuals = R6::R6Class("Counterfactuals",
     p.rec.gen  = NULL,
     p.rec.use.orig = NULL,
     use.ice.curve.var = NULL,
-    seltournament = NULL, 
     crow.dist.version = NULL, 
     sd.for.init = NULL,
     penalize.infeas = NULL,
@@ -189,7 +186,7 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       epsilon = NULL, fixed.features = NULL, max.changed = NULL, 
       mu = 50, generations = 50, p.rec = 0.9, p.rec.gen = 0.7, p.rec.use.orig = 0.7,
       p.mut = 0.2, p.mut.gen = 0.5, p.mut.use.orig = 0.2, 
-      use.ice.curve.var = FALSE, seltournament = TRUE,  
+      use.ice.curve.var = FALSE,  
       lower = NULL, upper = NULL, crow.dist.version = 1, sd.for.init = FALSE, 
       track.infeas = TRUE, penalize.infeas = FALSE) {
       
@@ -222,14 +219,13 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       checkmate::assert_number(p.rec.use.orig, lower = 0, upper = 1)
       checkmate::assert_true(crow.dist.version %in% c(1, 2, 3))
       checkmate::assert_logical(use.ice.curve.var)
-      checkmate::assert_logical(seltournament)
       checkmate::assert_logical(sd.for.init)
       checkmate::assert_logical(penalize.infeas)
       checkmate::assert_logical(track.infeas)
       
       # assign
       self$target = target
-      if (is.null(epsilon)) {
+      if (is.null(epsilon) & penalize.infeas) {
         train.data = predictor$data$get.x()
         gd = StatMatch::gower.dist(train.data, train.data)
         epsilon = quantile(gd, 0.1)[[1]]
@@ -247,7 +243,6 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       self$p.rec.use.orig = p.rec.use.orig
       self$use.ice.curve.var = use.ice.curve.var
       self$crow.dist.version = crow.dist.version
-      self$seltournament = seltournament
       self$lower = lower
       self$upper = upper
       self$sd.for.init = sd.for.init
@@ -419,7 +414,8 @@ Counterfactuals = R6::R6Class("Counterfactuals",
         pred = self$predictor$predict(self$predictor$data$get.x())
         private$ref.point[1] = diff(c(min(pred), max(pred)))
       }
-      # Initialize population based on x.interest, param.set and sdev
+      # Initialize population based on x.interest, param.set 
+      # Use sd to initialize numeric features (default FALSE) 
       lower = self$x.interest[names(private$sdev)] - private$sdev
       upper = self$x.interest[names(private$sdev)] + private$sdev
       if (self$sd.for.init && nrow(lower)>0 && nrow(upper)>0) {
@@ -427,16 +423,17 @@ Counterfactuals = R6::R6Class("Counterfactuals",
         upper.ps = pmin(ParamHelpers::getUpper(private$param.set), upper)
         lower.ps[names(self$lower)] = self$lower
         upper.ps[names(self$upper)] = self$upper
-        ps.initialize = ParamHelpers::makeParamSet(params = make_paramlist(
+        private$param.set.init = ParamHelpers::makeParamSet(params = make_paramlist(
           self$predictor$data$get.x(), 
           lower = lower.ps, 
           upper = upper.ps)
         )} else {
-          ps.initialize = private$param.set
+          private$param.set.init = private$param.set
         }
-      private$param.set.init = ps.initialize
-      initial.pop = ParamHelpers::sampleValues(ps.initialize, self$mu, 
+      initial.pop = ParamHelpers::sampleValues(private$param.set.init, self$mu, 
         discrete.names = TRUE)
+      
+      # Use ice curve variance to initialize use.original vector
       if (self$use.ice.curve.var) {
         ice.var = get_ICE_var(self$x.interest, self$predictor, private$param.set)
         prob.use.orig = 1 - mlr::normalizeFeatures(as.data.frame(ice.var), 
@@ -458,13 +455,11 @@ Counterfactuals = R6::R6Class("Counterfactuals",
       })
       
       # Create fitness function with package smoof
-      
-      
-      n.obj = ifelse(self$track.infeas, 4, 3)
+      n.objectives = ifelse(self$track.infeas, 4, 3)
       
       fn = smoof::makeMultiObjectiveFunction(
         has.simple.signature = FALSE, par.set = private$param.set, 
-        n.objectives = n.obj, 
+        n.objectives = n.objectives, 
         noisy = TRUE, ref.point = private$ref.point,
         fn = function(x, fidelity = NULL) {
           fitness_fun(x, x.interest = self$x.interest, target = self$target, 
@@ -473,7 +468,6 @@ Counterfactuals = R6::R6Class("Counterfactuals",
         })
       
       fn = mosmafs::setMosmafsVectorized(fn)
-      n.objectives = smoof::getNumberOfObjectives(fn) 
       
       # Define operators based on parameterset private$param.set
       # Messages can be ignored
@@ -491,9 +485,76 @@ Counterfactuals = R6::R6Class("Counterfactuals",
             fixed.features = self$fixed.features, max.changed = self$max.changed)
         }, supported = "custom")
       } else {
-        mutator = ecr::setup(mutConDens, p.gen = self$p.mut.gen, p.use.orig = self$p.mut.use.orig, 
-          pred = self$predictor, x.interest = self$x.interest, fixed.features = self$fixed.features, 
-          max.changed = self$max.changed, param.set = private$param.set)
+        single.mutator = suppressMessages(mosmafs::combine.operators(private$param.set,
+          numeric = ecr::setup(mosmafs::mutGaussScaled, p = self$p.mut.gen, sdev = sdev.l$numeric),
+          integer = ecr::setup(mosmafs::mutGaussIntScaled, p = self$p.mut.gen, sdev = sdev.l$integer),
+          discrete = ecr::setup(mosmafs::mutRandomChoice, p = self$p.mut.gen),
+          logical = ecr::setup(ecr::mutBitflip, p = self$p.mut.gen),
+          use.orig = ecr::setup(mosmafs::mutBitflipCHW, p = self$p.mut.use.orig),
+          .binary.discrete.as.logical = TRUE))
+        
+        mutator = ecr::makeMutator(function(ind) {
+         #browser()
+          
+          # Transform use.original 
+          ind$use.orig = as.logical(mosmafs::mutBitflipCHW(as.integer(ind$use.orig), p = self$p.mut.use.orig))
+          
+          # Transform to original values
+          ind = transform_to_orig(single.mutator(ind), x.interest, delete.use.orig = FALSE,
+            fixed.features = self$fixed.features, max.changed = self$max.changed)
+          
+          ind.short = ind
+          ind.short$use.orig = NULL
+          # Select features to mutate: 
+          affect = NA
+          affect = runif(length(ind.short)) < self$p.mut.gen
+          cols.nams = names(ind)[names(ind)!="use.orig"]
+          affected.cols = cols.nams[affect & !ind$use.orig]
+          affected.cols = sample(affected.cols)
+
+          
+          if (length(affected.cols != 0)) {
+            for (a in affected.cols) {
+              X = data.table::as.data.table(data.frame(lapply(ind.short, type.convert), stringsAsFactors=FALSE)) 
+              single.mutator = suppressMessages(mosmafs::combine.operators(private$param.set,
+                .params.group = c(a), 
+                group = ecr::setup(mutConDens, X = X, 
+                  pred = self$predictor, param.set = private$param.set), 
+                use.orig = mutInd, numeric = mutInd, integer = mutInd, discrete = mutInd,
+                logical = mutInd, .binary.discrete.as.logical = FALSE))
+              ind = single.mutator(ind)
+            }
+          }
+          
+          # Transform others 
+          # single.mutator = suppressMessages(mosmafs::combine.operators(private$param.set,
+          #   use.orig = mutInd,
+          #   .params.group = c(names(ind)[names(ind) != "use.orig"]), 
+          #   group = ecr::setup(mutConDens, p.gen = self$p.mut.gen, 
+          #     pred = self$predictor, use.orig = ind$use.orig, param.set = private$param.set)))
+          #   # group =  ecr::setup(mutConDens, p.gen = self$p.mut.gen, p.use.orig = self$p.mut.use.orig, 
+          #   #     pred = self$predictor, x.interest = self$x.interest, fixed.features = self$fixed.features,
+          #   #     max.changed = self$max.changed, param.set = private$param.set)))
+          # return(single.mutator(ind))
+          return(ind)
+        }, supported = "custom")
+        
+        
+        # mutator = ecr::makeMutator(function(ind) {
+        #   ind$use.orig = as.logical(mosmafs::mutBitflipCHW(as.integer(ind$use.orig), p = p.use.orig))
+        #   # ind = transform_to_orig(ind, x.interest, delete.use.orig = FALSE, 
+        #   #   fixed.features = self$fixed.features, max.changed = self$max.changed)
+        #   single.mutator(ind)
+        #   ind = transform_to_orig(single.mutator(ind), x.interest, delete.use.orig = FALSE, 
+        #     fixed.features = self$fixed.features, max.changed = self$max.changed)
+        #   ind$use.orig = NULL
+        #   ind = single.mutator(ind)
+        #   ind$use.orig = use.orig
+        #   assert_list(ind)
+        # })
+        # mutator = ecr::setup(mutConDens, p.gen = self$p.mut.gen, p.use.orig = self$p.mut.use.orig, 
+        #   pred = self$predictor, x.interest = self$x.interest, fixed.features = self$fixed.features, 
+        #   max.changed = self$max.changed, param.set = private$param.set)
       }
       
       recombinator = suppressMessages(mosmafs::combine.operators(private$param.set,
@@ -512,11 +573,8 @@ Counterfactuals = R6::R6Class("Counterfactuals",
         }))
       }, n.parents = 2, n.children = 2)
       
-      if (self$seltournament) { 
-        parent.selector = mosmafs::selTournamentMO
-      } else {
-        parent.selector = ecr::selSimple
-      }
+      parent.selector = mosmafs::selTournamentMO
+    
       
       survival.selector = ecr::setup(select_nondom, 
         epsilon = self$epsilon,  

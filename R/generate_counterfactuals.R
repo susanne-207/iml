@@ -125,7 +125,7 @@ select_diverse = function (control, population, offspring, fitness,
 #' @rdname select_diverse
 select_nondom = ecr::makeSelector(
   selector = function(fitness, n.select, candidates, 
-    epsilon = .Machine$double.xmax, 
+    epsilon = NULL, 
     extract.duplicates = TRUE, vers = 1, penalize.infeas = TRUE) {
     
     assert_number(n.select)
@@ -342,32 +342,84 @@ computeCrowdingDistanceR_ver2 = function(fitness, candidates) {
 #'   }
 #'   return(ind)
 #' }, supported = "custom")
-mutConDens = ecr::makeMutator(function(ind, p.gen, p.use.orig, pred, x.interest, fixed.features, max.changed,
-                                       param.set) {
+# mutConDens = ecr::makeMutator(function(ind, p.gen, p.use.orig, pred, x.interest, fixed.features, max.changed,
+#                                        param.set, ...) {
+#   
+#   # Mutate use.original vector: 
+#   ind$use.orig = as.logical(mosmafs::mutBitflipCHW(as.integer(ind$use.orig), p = p.use.orig))
+#   ind = transform_to_orig(ind, x.interest, delete.use.orig = FALSE, 
+#       fixed.features = fixed.features, max.changed = max.changed)
+#   use.orig = ind$use.orig
+#   ind$use.orig = NULL
+#   
+#   # Mutate others
+#   affect = NA
+#   affect = runif(length(ind)) < p.gen
+#   affected.cols = names(ind)[affect & !use.orig]
+#   affected.cols = sample(affected.cols)
+#   X = data.table::as.data.table(data.frame(lapply(ind, type.convert), stringsAsFactors=FALSE))
+#   for (a in affected.cols){
+#     val = pred$conditional$csample(X = X, feature = a, size = 10)[[1]]
+#     if (param.set$pars[[a]]$type == "discrete") {
+#       val = as.character(val)
+#     }
+#     if (param.set$pars[[a]]$type == "numeric") {
+#       lower = param.set$pars[[a]]$lower
+#       upper = param.set$pars[[a]]$upper
+#       val = pmin(pmax(lower, val), upper)
+#     }
+#     if (param.set$pars[[a]]$type == "integer") {
+#       lower = param.set$pars[[a]]$lower
+#       upper = param.set$pars[[a]]$upper
+#       val = as.integer(pmin(pmax(lower, val), upper))
+#     }
+#     ind[a] = val
+#   }
+#   ind$use.orig = use.orig
+#   assert_list(ind)
+#   return(ind)  
+# }, supported = "custom")
+
+mutConDens = ecr::makeMutator(function(ind, X, pred, param.set,...) {
   
   # Mutate use.original vector: 
-  ind$use.orig = as.logical(mosmafs::mutBitflipCHW(as.integer(ind$use.orig), p = p.use.orig))
-  ind = transform_to_orig(ind, x.interest, delete.use.orig = FALSE, 
-      fixed.features = fixed.features, max.changed = max.changed)
-  use.orig = ind$use.orig
-  ind$use.orig = NULL
+  # ind$use.orig = as.logical(mosmafs::mutBitflipCHW(as.integer(ind$use.orig), p = p.use.orig))
+  # ind = transform_to_orig(ind, x.interest, delete.use.orig = FALSE, 
+  #   fixed.features = fixed.features, max.changed = max.changed)
+  # use.orig = ind$use.orig
+  # ind$use.orig = NULL
   
   # Mutate others
-  affect = NA
-  affect = runif(length(ind)) < p.gen
-  affected.cols = names(ind)[affect & !use.orig]
-  affected.cols = sample(affected.cols)
-  X = data.table::as.data.table(data.frame(lapply(ind, type.convert), stringsAsFactors=FALSE))
-  for (a in affected.cols){
-    val = pred$conditional$csample(X = X, feature = a, size = 1)[[1]]
+  # affect = NA
+  # affect = runif(length(ind)) < p.gen
+  # affected.cols = names(ind)[affect & !use.orig]
+  # affected.cols = sample(affected.cols)
+  # X = data.table::as.data.table(data.frame(lapply(ind, type.convert), stringsAsFactors=FALSE))
+  # for (a in affected.cols){
+  #   
+  a = names(ind)
+    val = pred$conditional$csample(X = X, feature = a, size = 10)[[1]]
+    if (param.set$pars[[a]]$type == "discrete") {
+      val = as.character(val)
+    }
     if (param.set$pars[[a]]$type == "numeric") {
       lower = param.set$pars[[a]]$lower
       upper = param.set$pars[[a]]$upper
       val = pmin(pmax(lower, val), upper)
     }
+    if (param.set$pars[[a]]$type == "integer") {
+      lower = param.set$pars[[a]]$lower
+      upper = param.set$pars[[a]]$upper
+      val = as.integer(pmin(pmax(lower, val), upper))
+    }
     ind[a] = val
-  }
-  ind$use.orig = use.orig
-  assert_list(ind)
+  #}
+  #ind$use.orig = use.orig
+  #assert_list(ind)
   return(ind)  
+}, supported = "custom")
+
+
+mutInd = makeMutator(function(ind, ...) {
+  ind
 }, supported = "custom")
